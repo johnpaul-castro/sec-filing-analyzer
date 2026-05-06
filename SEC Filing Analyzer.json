@@ -1,0 +1,455 @@
+{
+  "name": "SEC Filing Analyzer",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "4c6e753b-5b67-49ac-a4c7-f8e806c6e334",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "amount": 0.15
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        544,
+        0
+      ],
+      "id": "7be78eae-4754-4d4e-ac5e-463259d2abfa",
+      "name": "Wait",
+      "webhookId": "696d19b9-206b-45c5-a372-3f5067c06df2"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT company_id\n, company_name\n, cik as cik_number\n, ticker as ticker_symbol\nFROM sec_intel.company\nORDER BY company_name;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        192,
+        0
+      ],
+      "id": "3c56e1b4-de0b-420a-958b-600f07fe8c53",
+      "name": "Get Companies",
+      "credentials": {
+        "postgres": {
+          "id": "Byzp5qygYT9Iao17",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO sec_intel.filing\n    ( company_id, form_type, filing_date\n    , accession_number, filing_url\n    , primary_document, dt_created )\nVALUES\n    ( {{ $json.company_id }}\n    , '{{ $json.form_type }}'\n    , '{{ $json.filing_date }}'\n    , '{{ $json.accession_number }}'\n    , '{{ $json.filing_url }}'\n    , '{{ $json.primary_document }}'\n    , NOW() )\nON CONFLICT (accession_number) DO NOTHING\nRETURNING filing_id;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        928,
+        0
+      ],
+      "id": "1476d528-773d-494d-add8-38526adc62f8",
+      "name": "Insert Filing",
+      "credentials": {
+        "postgres": {
+          "id": "Byzp5qygYT9Iao17",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Parse Filings').item.json.filing_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "SECFilingAnalyzer jp@yourdomain.com"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1104,
+        0
+      ],
+      "id": "87f589f2-dc52-4fe7-8e74-734b1bfd6247",
+      "name": "Fetch Filing Document"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fullText = $input.first().json.data\n  || $input.first().json.body || '';\n\n// Strip XML/XBRL and HTML tags\nconst cleaned = fullText\n  .replace(/<[^>]*>/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .replace(/\"/g, \"'\")\n  .replace(/\\\\/g, '')\n  .replace(/[\\x00-\\x1F\\x7F]/g, '')\n  .trim();\n\n// Take first ~40k chars to stay safe on token limits\nconst truncated = cleaned.substring(0, 40000);\n\nreturn [{\n  json: {\n    ...$input.first().json,\n    filing_text: truncated\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        0
+      ],
+      "id": "6501ac99-5d50-4265-9692-d30a1ea891ff",
+      "name": "Truncate Filing"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    content: [{\n      text: JSON.stringify({\n        summary: `${$json.company_name} filed a ${$json.form_type} on ${$json.filing_date}. [STUB] Pipeline validation data.`,\n        key_risks: 'Regulatory environment changes; supply chain disruption risk (stub)',\n        financial_highlights: 'Revenue: $X.XB; Operating margin: XX% (stub)',\n        contracts_mentioned: 'Contract award mentioned; Boeing 787 program reference (stub)',\n        workforce_changes: 'Headcount reduction planned in Q4 (stub)',\n        sentiment: 'neutral',\n        llm_model: 'stub-test'\n      })\n    }]\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1472,
+        -224
+      ],
+      "id": "9379ee16-f9d9-47b2-aaf0-444a4c718766",
+      "name": "Stub Claude Response"
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst content = response.content[0].text;\nlet analysis;\ntry {\n  const cleaned = content\n    .replace(/```json|```/g, '')\n    .trim();\n  analysis = JSON.parse(cleaned);\n} catch (e) {\n  analysis = {\n    summary: 'Parse error - raw response stored',\n    raw_response: content,\n    sentiment: 'neutral',\n    confidence_score: 0\n  };\n}\nreturn [{ json: analysis }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1664,
+        0
+      ],
+      "id": "65281d90-9df7-44ea-9bf5-f0a67e8a6f94",
+      "name": "Parse Claude Response"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO sec_intel.filing_insight\n    ( filing_id, summary, key_risks\n    , financial_highlights, contracts_mentioned\n    , workforce_changes, sentiment\n    , llm_model, dt_created )\nVALUES\n    ( {{ $('Insert Filing').item.json.filing_id }}\n    , '{{ $json.summary.replace(/'/g, \"''\") }}'\n    , '{{ ($json.key_risks || \"\").replace(/'/g, \"''\") }}'\n    , '{{ ($json.financial_highlights || \"\").replace(/'/g, \"''\") }}'\n    , '{{ ($json.contracts_mentioned || \"\").replace(/'/g, \"''\") }}'\n    , '{{ ($json.workforce_changes || \"\").replace(/'/g, \"''\") }}'\n    , '{{ $json.sentiment }}'\n    , '{{ $json.llm_model || \"stub\" }}'\n    , NOW() );",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1872,
+        0
+      ],
+      "id": "829b0372-73a1-4fda-9e2c-8f36f02ff9dc",
+      "name": "Insert Insights",
+      "credentials": {
+        "postgres": {
+          "id": "Byzp5qygYT9Iao17",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://data.sec.gov/submissions/CIK{{ $json.cik_number.toString().padStart(10, '0') }}.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "SECFilingAnalyzer jp@yourdomain.com"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        368,
+        0
+      ],
+      "id": "37ac8cfa-2c55-4f72-841c-d29738f0beb1",
+      "name": "SEC EDGAR API"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst company = {\n  company_id: $('Get Companies').first().json.company_id,\n  company_name: $('Get Companies').first().json.company_name,\n  ticker_symbol: $('Get Companies').first().json.ticker_symbol,\n  cik_number: $('Get Companies').first().json.cik_number\n};\nconst recent = data.filings?.recent || data.recentFilings || {};\nconst forms = recent.form || [];\nconst dates = recent.filingDate || [];\nconst accessions = recent.accessionNumber || [];\nconst primaryDocs = recent.primaryDocument || [];\nconst descriptions = recent.primaryDocDescription || [];\nconst targetForms = ['10-K','10-Q','8-K','DEF 14A','S-1','20-F'];\nconst yesterday = new Date();\nyesterday.setDate(yesterday.getDate() - 30);\nconst cutoff = yesterday.toISOString().split('T')[0];\nconst filings = [];\nfor (let i = 0; i < forms.length; i++) {\n  if (targetForms.includes(forms[i]) && dates[i] >= cutoff) {\n    const accClean = accessions[i].replace(/-/g, '');\n    filings.push({\n      ...company,\n      form_type: forms[i],\n      filing_date: dates[i],\n      accession_number: accessions[i],\n      primary_document: primaryDocs[i],\n      description: descriptions[i] || '',\n      filing_url: `https://www.sec.gov/Archives/edgar/data/`\n        + `${company.cik_number}/${accClean}/${primaryDocs[i]}`\n    });\n  }\n}\nif (filings.length === 0) return [];\nreturn filings.map(f => ({ json: f }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        736,
+        0
+      ],
+      "id": "fd0a77da-9a74-47d8-ba0e-7857f980ce40",
+      "name": "Parse Filings"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.company_name\n     , c.ticker\n     , f.form_type\n     , f.filing_date\n     , f.filing_url\n     , fi.summary\n     , fi.key_risks\n     , fi.financial_highlights\n     , fi.contracts_mentioned\n     , fi.sentiment\nFROM sec_intel.filing_insight fi\nJOIN sec_intel.filing f\n  ON f.filing_id = fi.filing_id\nJOIN sec_intel.company c\n  ON c.company_id = f.company_id\nWHERE fi.dt_created >= CURRENT_DATE\nORDER BY c.company_name, f.filing_date DESC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2080,
+        0
+      ],
+      "id": "2a3063fc-7121-4ba2-8ac7-8e9127cd0b35",
+      "name": "Query Today's Insights",
+      "credentials": {
+        "postgres": {
+          "id": "Byzp5qygYT9Iao17",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "johnpaulcastro@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        2480,
+        0
+      ],
+      "id": "1157eb36-c2a5-4227-99cb-20535acfee39",
+      "name": "Send Emal",
+      "webhookId": "8e61e78f-7834-4962-bb16-575dcc4c1dda",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "4FB0wL7AzXaDAFWV",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nif (items.length === 0) {\n  return [{\n    json: {\n      subject: 'SEC Filing Digest - No New Filings',\n      body: '<p>No new filings from tracked A&D companies today.</p>'\n    }\n  }];\n}\n\nlet html = '<h2>SEC Filing Digest - ' + new Date().toLocaleDateString() + '</h2>';\n\nfor (const item of items) {\n  const d = item.json;\n  const color =\n    d.sentiment === 'positive' ? '#2e7d32' :\n    d.sentiment === 'negative' ? '#c62828' :\n    d.sentiment === 'mixed' ? '#ef6c00' : '#616161';\n\n  html += '<div style=\"border-left:4px solid ' + color + ';padding:12px;margin:16px 0;\">';\n  html += '<h3>' + d.company_name + ' (' + d.ticker + ') - ' + d.form_type + '</h3>';\n  html += '<p><strong>Filed:</strong> ' + d.filing_date + ' | ';\n  html += '<strong>Sentiment:</strong> <span style=\"color:' + color + '\">' + d.sentiment + '</span></p>';\n  html += '<p>' + (d.summary || '') + '</p>';\n  if (d.financial_highlights) html += '<p><strong>Financials:</strong> ' + d.financial_highlights + '</p>';\n  if (d.key_risks) html += '<p><strong>Risks:</strong> ' + d.key_risks + '</p>';\n  if (d.contracts_mentioned) html += '<p><strong>Contracts:</strong> ' + d.contracts_mentioned + '</p>';\n  if (d.filing_url) html += '<p><a href=\"' + d.filing_url + '\">View Filing</a></p>';\n  html += '</div>';\n}\n\nreturn [{\n  json: {\n    subject: 'SEC Filing Digest - ' + items.length + ' filing(s) - ' + new Date().toLocaleDateString(),\n    body: html\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        0
+      ],
+      "id": "4870c70c-f5dc-4d0b-b1a1-c977c2763835",
+      "name": "Format Digest"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "YOUR_API_KEY_HERE"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={\"model\":\"claude-haiku-4-5-20251001\",\"max_tokens\":2000,\"messages\":[{\"role\":\"user\",\"content\":\"You are an aerospace/defense industry analyst. Analyze this SEC filing and return ONLY valid JSON with these keys: summary (string), key_risks (string), financial_highlights (string), contracts_mentioned (string), workforce_changes (string), sentiment (string: positive/negative/neutral/mixed). Company: {{ $('Parse Filings').item.json.company_name }} ({{ $('Parse Filings').item.json.ticker_symbol }}). Filing Type: {{ $('Parse Filings').item.json.form_type }}. Filing Date: {{ $('Parse Filings').item.json.filing_date }}. Filing Text: {{ $('Truncate Filing').item.json.filing_text.replace(/\\\"/g, '').substring(0, 30000) }}. Respond ONLY with the JSON object. No markdown no backticks.\"}]}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1472,
+        0
+      ],
+      "id": "cf46c857-5658-4a51-863b-c1b361bd4feb",
+      "name": "Claude API (Live)"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get Companies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Parse Filings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Companies": {
+      "main": [
+        [
+          {
+            "node": "SEC EDGAR API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Filing": {
+      "main": [
+        [
+          {
+            "node": "Fetch Filing Document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Filing Document": {
+      "main": [
+        [
+          {
+            "node": "Truncate Filing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Truncate Filing": {
+      "main": [
+        [
+          {
+            "node": "Claude API (Live)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stub Claude Response": {
+      "main": [
+        []
+      ]
+    },
+    "Parse Claude Response": {
+      "main": [
+        [
+          {
+            "node": "Insert Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SEC EDGAR API": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Filings": {
+      "main": [
+        [
+          {
+            "node": "Insert Filing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Insights": {
+      "main": [
+        [
+          {
+            "node": "Query Today's Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Today's Insights": {
+      "main": [
+        [
+          {
+            "node": "Format Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Digest": {
+      "main": [
+        [
+          {
+            "node": "Send Emal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude API (Live)": {
+      "main": [
+        [
+          {
+            "node": "Parse Claude Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "d2b92069-abf9-4a23-af8e-7d8a3508cd0a",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "be9619151b145ea837aaa210707206f37c041c722a59d58efd967eff864e475f"
+  },
+  "id": "HFLruS1lZk9fDyjc",
+  "tags": []
+}
